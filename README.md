@@ -1,150 +1,188 @@
-# GitHub Codebase RAG Demo
+# GitHub Retrieval Agent
 
-一个面向开发者的 GitHub 代码库架构问答 demo。
+A developer-focused RAG demo for discovering, indexing, and asking questions about GitHub codebases.
 
-它可以：
+The app helps you find repositories worth studying, build a lightweight knowledge base from their source code, and ask architecture-oriented questions through a chat interface.
 
-- 根据关键词搜索 GitHub 仓库，中文/自然语言会先用模型改写成 GitHub 友好的英文检索词
-- 自动用 README、文件树和模型做轻量初筛，只返回值得学习的目标项目
-- 把搜索结果和仓库初筛结果写入 `.rag_demo/memory.json`，避免相同方向重复检索和重复调用模型
-- 下载并索引仓库源码
-- 对代码文件做 chunk 切分和 BM25 检索
-- 默认保存到本地知识库，可选同步到 Qdrant Cloud
-- 基于检索片段回答架构问题
-- 如果配置了百炼/通义或 OpenAI 兼容 API，使用模型生成答案；否则返回本地抽取式结果
+## Features
 
-## 快速开始
+- Rewrite Chinese or natural-language topics into GitHub-friendly search queries.
+- Search GitHub repositories with filters such as stars, language, fork status, and archive status.
+- Automatically screen candidate repositories with README, file tree, and optional LLM judgment.
+- Keep a memory cache in `.rag_demo/memory.json` to avoid repeated searches and repeated screening calls.
+- Download and index repository source files.
+- Split code into chunks and retrieve relevant context with local BM25.
+- Use a local JSON knowledge base by default.
+- Optionally sync indexed chunks to Qdrant Cloud for vector retrieval.
+- Answer codebase architecture questions with an OpenAI-compatible chat API.
+- Fall back to local extractive answers when no LLM API key is configured.
+- Provide a browser UI with repository discovery, indexed repository search, streaming chat answers, citations, and copy actions.
+
+## Quick Start
 
 ```bash
 cp .env.example .env
 python3 app.py
 ```
 
-然后打开：
+Then open:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-## Docker 部署
+## Docker Deployment
 
-先准备配置：
+Create your local environment file first:
 
 ```bash
 cp .env.example .env
 ```
 
-然后启动：
+Start the app:
 
 ```bash
 docker compose up --build
 ```
 
-打开：
+Open:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-后台运行：
+Run in the background:
 
 ```bash
 docker compose up -d --build
 ```
 
-停止：
+Stop the app:
 
 ```bash
 docker compose down
 ```
 
-索引、下载的仓库缓存和搜索记忆库会保存在 Docker volume `rag_demo_data` 中，对应容器内的 `/app/.rag_demo`。
+Indexed data, downloaded repository cache, and discovery memory are stored in the Docker volume `rag_demo_data`, mounted at `/app/.rag_demo` inside the container.
 
-如果要清空这些数据：
+To remove the stored data:
 
 ```bash
 docker compose down -v
 ```
 
-## API Key
+## Configuration
 
-`.env` 里可以配置：
+Copy `.env.example` to `.env` and fill in only the values you need.
 
 ```bash
-GITHUB_TOKEN=你的 GitHub token
-DASHSCOPE_API_KEY=你的百炼 API key
+GITHUB_TOKEN=your_github_token
+
+DASHSCOPE_API_KEY=your_bailian_or_dashscope_api_key
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_MODEL=qwen-plus
 ```
 
-`GITHUB_TOKEN` 不是必需的，但未认证的 GitHub Search API 速率限制更低。
+`GITHUB_TOKEN` is optional, but unauthenticated GitHub Search API requests have a much lower rate limit.
 
-LLM API key 也不是必需的。没有它时，demo 会使用本地 BM25 检索，并展示最相关的代码片段。
+The LLM API key is also optional. Without it, the demo still performs local retrieval and returns ranked code excerpts.
 
-### 使用阿里云百炼 / 通义千问
+### Alibaba Cloud Bailian / Tongyi Qwen
 
-如果你用的是百炼平台的 DashScope API key，`.env` 可以这样写：
+If you use a DashScope API key from Alibaba Cloud Bailian, configure:
 
 ```bash
-DASHSCOPE_API_KEY=你的百炼API_KEY
+DASHSCOPE_API_KEY=your_bailian_api_key
 OPENAI_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 OPENAI_MODEL=qwen-plus
 ```
 
-如果你使用的是新加坡或美国地域，把 `OPENAI_BASE_URL` 换成对应地域：
+For other regions, change `OPENAI_BASE_URL`:
 
 ```bash
-# 新加坡
+# Singapore
 OPENAI_BASE_URL=https://dashscope-intl.aliyuncs.com/compatible-mode/v1
 
-# 美国（弗吉尼亚）
+# US Virginia
 OPENAI_BASE_URL=https://dashscope-us.aliyuncs.com/compatible-mode/v1
 ```
 
-这个项目使用 OpenAI 兼容的 `chat/completions` 接口，所以百炼、OpenAI 或其他兼容服务都可以通过 `OPENAI_BASE_URL` / `OPENAI_MODEL` 切换。
+This project uses the OpenAI-compatible `chat/completions` API, so Bailian, OpenAI, and other compatible providers can be switched through `OPENAI_BASE_URL` and `OPENAI_MODEL`.
 
-### 可选：连接 Qdrant Cloud
-
-不配 Qdrant 时，demo 会把索引写到 `.rag_demo/indexes`，并用本地 BM25 检索。
-
-如果你想接云向量库，`.env` 加上：
+OpenAI example:
 
 ```bash
-QDRANT_URL=https://你的-cluster-url
-QDRANT_API_KEY=你的 Qdrant Database API key
+OPENAI_API_KEY=your_openai_api_key
+OPENAI_BASE_URL=https://api.openai.com/v1
+OPENAI_MODEL=gpt-4.1-mini
+```
+
+Provider-neutral aliases are also supported:
+
+```bash
+LLM_API_KEY=your_api_key
+LLM_BASE_URL=https://your-compatible-endpoint/v1
+LLM_MODEL=your_model
+```
+
+## Optional Qdrant Cloud
+
+If Qdrant is not configured, the demo stores indexes under `.rag_demo/indexes` and uses local BM25 retrieval.
+
+To connect Qdrant Cloud, add:
+
+```bash
+QDRANT_URL=https://your-cluster-url
+QDRANT_API_KEY=your_qdrant_database_api_key
 QDRANT_COLLECTION=codebase_rag
 
 EMBEDDING_MODEL=text-embedding-v4
 EMBEDDING_DIMENSIONS=1024
 ```
 
-embedding API key 默认会复用 `DASHSCOPE_API_KEY`。如果你想单独配置，也可以写：
+The embedding API key reuses `DASHSCOPE_API_KEY` by default. You can also configure it separately:
 
 ```bash
-EMBEDDING_API_KEY=你的百炼API_KEY
+EMBEDDING_API_KEY=your_embedding_api_key
 EMBEDDING_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
 ```
 
-Qdrant 写入使用数据库 REST API：`PUT /collections/{collection}/points`。检索使用 `POST /collections/{collection}/points/query` 并按 `repo_id` 过滤，只查当前仓库的 chunk。
+Qdrant writes use the database REST API endpoint `PUT /collections/{collection}/points`. Retrieval uses `POST /collections/{collection}/points/query` and filters by `repo_id`, so each question only searches chunks from the selected repository.
 
-## 建议提问
+## Suggested Questions
 
-索引仓库后可以问：
+After indexing a repository, try asking:
 
-- 这个项目的入口文件在哪里？
-- 请求从路由到业务逻辑的大致流程是什么？
-- 这个仓库主要分成哪些模块？
-- 数据库访问层在哪里？
-- 如果我要新增一个 API，应该改哪些文件？
+- Where is the main entry point of this project?
+- What is the request flow from routing to business logic?
+- What are the major modules in this repository?
+- Where is the database access layer?
+- If I want to add a new API endpoint, which files should I change?
+- What design patterns or architectural choices are worth learning from this codebase?
 
-## 项目结构
+## Project Structure
 
 ```text
-app.py              # 纯标准库后端、GitHub 客户端、索引器和问答逻辑
-static/index.html   # Web demo
-static/styles.css   # 页面样式
-static/app.js       # 前端交互
-.env.example        # API key 和配置示例
-Dockerfile          # 容器镜像定义
-docker-compose.yml  # 本地 Docker Compose 部署
+app.py                         # Minimal application entry point
+codebase_rag/
+  common.py                    # Shared paths, config, JSON, HTTP, and tokenization helpers
+  github_discovery.py          # GitHub search, query rewriting, repository screening, and memory cache
+  indexing.py                  # Repository download, file selection, chunking, local index, and BM25 retrieval
+  llm.py                       # OpenAI-compatible chat/stream helpers and prompt construction
+  qa.py                        # Retrieval and answer orchestration
+  qdrant_store.py              # Qdrant collection setup, payload indexes, embeddings, upsert, and search
+  server.py                    # HTTP server, API routes, static files, and SSE streaming
+static/
+  index.html                   # Web UI
+  styles.css                   # UI styles
+  app.js                       # Frontend interactions and streaming chat
+.env.example                   # Environment variable template
+Dockerfile                     # Container image definition
+docker-compose.yml             # Local Docker Compose deployment
 ```
+
+## Notes
+
+- Do not commit `.env`. It is ignored by `.gitignore`.
+- Keep real API keys only in your local `.env` or deployment secret manager.
+- The `.rag_demo/` directory is generated runtime data and should not be committed.
