@@ -1,0 +1,9 @@
+.env
+.rag_demo/
+__pycache__/
+*.pyc
+.DS_Store
+.git/
+.gitignore
+Dockerfile
+docker-compose.yml

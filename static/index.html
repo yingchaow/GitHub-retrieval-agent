@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>GitHub Codebase RAG</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="appbar">
+        <div class="brand">
+          <button id="toggleSidebar" class="icon-button" title="折叠仓库栏">☰</button>
+          <div>
+            <h1>代码库架构问答</h1>
+            <span id="selectedRepo" class="muted">先搜索并索引一个仓库</span>
+          </div>
+        </div>
+        <div class="status-strip">
+          <span id="modeBadge">Local BM25</span>
+          <span id="vectorBadge">本地知识库</span>
+          <span id="repoBadge">未选择仓库</span>
+        </div>
+      </header>
+
+      <section id="workspace" class="workspace">
+        <aside id="sidebar" class="panel search-panel">
+          <div class="panel-head">
+            <h2>仓库发现</h2>
+            <button id="refreshRepos" class="icon-button" title="刷新已索引仓库">刷新</button>
+          </div>
+
+          <label>
+            关键词
+            <input id="keyword" placeholder="例如：跨模态哈希检索、RAG、代码生成 Agent" />
+          </label>
+
+          <label>
+            最少 Star
+            <input id="minStars" type="number" min="0" placeholder="可选，例如 100" />
+          </label>
+
+          <button id="searchButton" class="primary">搜索 GitHub</button>
+
+          <section class="fold-section">
+            <button class="fold-head" data-fold-target="searchResultsWrap" type="button">
+              <span>目标项目</span>
+              <span class="fold-mark">收起</span>
+            </button>
+            <div id="searchResultsWrap" class="fold-body">
+              <div id="searchResults" class="result-list empty">还没有目标项目</div>
+            </div>
+          </section>
+
+          <section class="fold-section">
+            <div class="fold-head repo-fold-head">
+              <button data-fold-target="repoListWrap" type="button">
+                <span>已索引仓库</span>
+                <span class="fold-mark">收起</span>
+              </button>
+              <input id="repoFilter" class="compact-input" placeholder="过滤仓库" />
+            </div>
+            <div id="repoListWrap" class="fold-body">
+              <div id="repoList" class="repo-list empty">暂无索引</div>
+            </div>
+          </section>
+        </aside>
+
+        <section class="panel qa-panel">
+          <div class="chat-toolbar">
+            <button id="copyAllAnswers" class="icon-button" type="button">复制全部</button>
+          </div>
+
+          <div class="qa-main">
+            <div id="chatMessages" class="chat-messages">
+              <article class="message assistant-message">
+                <div class="message-meta">Assistant</div>
+                <div class="message-body">选择一个已索引仓库后，直接在下方提问。</div>
+              </article>
+            </div>
+
+            <aside id="sourcesPanel" class="sources-panel collapsed">
+              <div class="sources-head">
+                <div class="subhead">引用片段</div>
+                <button id="toggleSources" class="icon-button" title="展开引用片段">引用</button>
+              </div>
+              <div id="contexts" class="contexts empty">暂无引用</div>
+            </aside>
+          </div>
+
+          <form id="askForm" class="composer">
+            <textarea id="question" rows="3" placeholder="询问这个仓库的模块、入口、调用链、数据流或扩展点"></textarea>
+            <button id="askButton" class="primary" type="submit">发送</button>
+          </form>
+        </section>
+      </section>
+    </main>
+
+    <div id="toast" class="toast" hidden></div>
+    <script src="/app.js"></script>
+  </body>
+</html>
