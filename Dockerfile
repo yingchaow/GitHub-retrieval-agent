@@ -8,6 +8,7 @@ ENV PORT=8000
 WORKDIR /app
 
 COPY app.py README.md ./
+COPY codebase_rag ./codebase_rag
 COPY static ./static
 
 RUN mkdir -p /app/.rag_demo/repos /app/.rag_demo/indexes

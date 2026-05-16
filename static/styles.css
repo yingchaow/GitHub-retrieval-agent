@@ -246,6 +246,20 @@ textarea:focus {
   flex: 0 0 auto;
 }
 
+.search-controls-section {
+  flex: 0 0 auto;
+  margin-top: 8px;
+}
+
+.search-controls-body {
+  display: grid;
+  gap: 10px;
+}
+
+.search-controls-body label {
+  margin-bottom: 0;
+}
+
 .fold-head {
   display: flex;
   flex: 0 0 auto;
@@ -403,6 +417,15 @@ textarea:focus {
   padding: 0 10px;
   font-size: 12px;
   font-weight: 800;
+}
+
+.danger-action {
+  border-color: #f1b8b8;
+  color: #a93434;
+}
+
+.danger-action:hover {
+  background: #fff1f1;
 }
 
 .screen-result {

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .common import *
 from .github_discovery import search_github_repositories, screen_repository
-from .indexing import build_index, list_indexes
+from .indexing import build_index, delete_index, list_indexes
 from .llm import build_extractive_answer, build_answer_prompt, call_llm_answer, get_embedding_config, get_llm_config, stream_chat_completion
 from .qa import answer_question, retrieve_contexts
 from .qdrant_store import get_qdrant_config, qdrant_is_ready
@@ -73,9 +73,17 @@ class DemoHandler(BaseHTTPRequestHandler):
             body = read_json_body(self)
             if parsed.path == "/api/ingest":
                 full_name = str(body.get("full_name", "")).strip()
+                topic = str(body.get("topic", "")).strip()
                 if not full_name or "/" not in full_name:
                     raise ValueError("full_name 格式应为 owner/repo")
-                json_response(self, 200, build_index(full_name))
+                json_response(self, 200, build_index(full_name, topic))
+                return
+            if parsed.path == "/api/repos/delete":
+                repo_id = str(body.get("repo_id", "")).strip()
+                confirm = bool(body.get("confirm"))
+                if not confirm:
+                    raise ValueError("删除仓库索引前需要确认")
+                json_response(self, 200, delete_index(repo_id))
                 return
             if parsed.path == "/api/screen":
                 full_name = str(body.get("full_name", "")).strip()

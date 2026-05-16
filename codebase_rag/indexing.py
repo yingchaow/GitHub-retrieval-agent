@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+import ast
+
 from .common import *
 
 
 INDEX_CACHE: dict[str, CodeIndex] = {}
 
 
+@dataclass
 class Chunk:
     id: str
     path: str
@@ -99,6 +102,44 @@ def get_index(repo_id: str) -> CodeIndex:
     return INDEX_CACHE[repo_id]
 
 
+def build_topic_tags(full_name: str, topic: str = "") -> list[str]:
+    values = [topic.strip(), full_name.replace("/", " ")]
+    tags: list[str] = []
+    for value in values:
+        if not value:
+            continue
+        compact = re.sub(r"\s+", " ", value).strip().lower()
+        if compact and compact not in tags:
+            tags.append(compact)
+        for token in tokenize(value):
+            if token not in tags:
+                tags.append(token)
+    return tags[:16]
+
+
+def infer_topic_from_memory(full_name: str) -> str:
+    memory = load_memory()
+    for item in memory.get("searches", {}).values():
+        response = item.get("response", {}) if isinstance(item, dict) else {}
+        repos = response.get("items", []) if isinstance(response, dict) else []
+        if any(repo.get("full_name") == full_name for repo in repos if isinstance(repo, dict)):
+            query = str(item.get("query") or "").strip()
+            if query:
+                return query
+    return ""
+
+
+def ensure_index_topic_metadata(payload: dict[str, Any]) -> bool:
+    full_name = str(payload.get("full_name") or "")
+    topic = str(payload.get("topic") or "").strip() or infer_topic_from_memory(full_name)
+    existing = payload.get("topic_tags")
+    if isinstance(existing, list) and existing:
+        return False
+    payload["topic"] = topic
+    payload["topic_tags"] = build_topic_tags(full_name, topic)
+    return True
+
+
 def download_repository(full_name: str) -> Path:
     repo_id = slugify_repo(full_name)
     destination = REPOS_DIR / repo_id
@@ -169,37 +210,123 @@ def read_text_lossy(path: Path) -> str:
     return raw.decode("utf-8", errors="replace")
 
 
-def chunk_file(repo_path: Path, file_path: Path, chunk_lines: int = 90, overlap: int = 18) -> list[Chunk]:
+def get_chunk_config() -> dict[str, int]:
+    return {
+        "default_lines": max(20, int(os.environ.get("DEFAULT_CHUNK_LINES", "90") or 90)),
+        "python_lines": max(30, int(os.environ.get("PYTHON_CHUNK_LINES", "120") or 120)),
+        "markdown_lines": max(20, int(os.environ.get("MARKDOWN_CHUNK_LINES", "90") or 90)),
+        "overlap": max(0, int(os.environ.get("CHUNK_OVERLAP_LINES", "18") or 18)),
+    }
+
+
+def make_chunk(rel_path: str, lines: list[str], start: int, end: int) -> Chunk | None:
+    content = "\n".join(lines[start:end]).strip()
+    if not content:
+        return None
+    chunk_id = f"{rel_path}:{start + 1}-{end}"
+    return Chunk(
+        id=chunk_id,
+        path=rel_path,
+        start_line=start + 1,
+        end_line=end,
+        content=content,
+        token_count=len(tokenize(content)),
+    )
+
+
+def split_line_window(
+    rel_path: str,
+    lines: list[str],
+    start: int,
+    end: int,
+    max_lines: int,
+    overlap: int,
+) -> list[Chunk]:
+    chunks: list[Chunk] = []
+    cursor = start
+    while cursor < end:
+        chunk_end = min(end, cursor + max_lines)
+        chunk = make_chunk(rel_path, lines, cursor, chunk_end)
+        if chunk:
+            chunks.append(chunk)
+        if chunk_end >= end:
+            break
+        cursor = max(chunk_end - overlap, cursor + 1)
+    return chunks
+
+
+def chunk_range_with_overlap(
+    rel_path: str,
+    lines: list[str],
+    start: int,
+    end: int,
+    max_lines: int,
+    overlap: int,
+) -> list[Chunk]:
+    if end - start <= max_lines:
+        chunk = make_chunk(rel_path, lines, start, end)
+        return [chunk] if chunk else []
+    return split_line_window(rel_path, lines, start, end, max_lines, overlap)
+
+
+def chunk_markdown(rel_path: str, lines: list[str], max_lines: int, overlap: int) -> list[Chunk]:
+    heading_starts = [idx for idx, line in enumerate(lines) if re.match(r"^#{1,6}\s+\S", line)]
+    if not heading_starts:
+        return split_line_window(rel_path, lines, 0, len(lines), max_lines, overlap)
+    chunks: list[Chunk] = []
+    if heading_starts[0] > 0:
+        chunks.extend(chunk_range_with_overlap(rel_path, lines, 0, heading_starts[0], max_lines, overlap))
+    for pos, start in enumerate(heading_starts):
+        end = heading_starts[pos + 1] if pos + 1 < len(heading_starts) else len(lines)
+        chunks.extend(chunk_range_with_overlap(rel_path, lines, start, end, max_lines, overlap))
+    return chunks
+
+
+def chunk_python(rel_path: str, text: str, lines: list[str], max_lines: int, overlap: int) -> list[Chunk]:
+    try:
+        tree = ast.parse(text)
+    except SyntaxError:
+        return split_line_window(rel_path, lines, 0, len(lines), max_lines, overlap)
+
+    nodes = [
+        node
+        for node in tree.body
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and getattr(node, "end_lineno", None)
+    ]
+    if not nodes:
+        return split_line_window(rel_path, lines, 0, len(lines), max_lines, overlap)
+
+    chunks: list[Chunk] = []
+    cursor = 0
+    for node in sorted(nodes, key=lambda item: item.lineno):
+        start = max(0, node.lineno - 1)
+        end = min(len(lines), int(node.end_lineno or node.lineno))
+        if cursor < start:
+            chunks.extend(chunk_range_with_overlap(rel_path, lines, cursor, start, max_lines, overlap))
+        chunks.extend(chunk_range_with_overlap(rel_path, lines, start, end, max_lines, overlap))
+        cursor = max(cursor, end)
+    if cursor < len(lines):
+        chunks.extend(chunk_range_with_overlap(rel_path, lines, cursor, len(lines), max_lines, overlap))
+    return chunks
+
+
+def chunk_file(repo_path: Path, file_path: Path) -> list[Chunk]:
     rel_path = str(file_path.relative_to(repo_path))
     text = read_text_lossy(file_path)
     if not text.strip():
         return []
     lines = text.splitlines()
-    chunks: list[Chunk] = []
-    start = 0
-    while start < len(lines):
-        end = min(len(lines), start + chunk_lines)
-        content = "\n".join(lines[start:end]).strip()
-        if content:
-            chunk_id = f"{rel_path}:{start + 1}-{end}"
-            chunks.append(
-                Chunk(
-                    id=chunk_id,
-                    path=rel_path,
-                    start_line=start + 1,
-                    end_line=end,
-                    content=content,
-                    token_count=len(tokenize(content)),
-                )
-            )
-        if end == len(lines):
-            break
-        start = max(end - overlap, start + 1)
-    return chunks
+    config = get_chunk_config()
+    suffix = file_path.suffix.lower()
+    if suffix == ".py":
+        return chunk_python(rel_path, text, lines, config["python_lines"], config["overlap"])
+    if suffix in {".md", ".mdx"}:
+        return chunk_markdown(rel_path, lines, config["markdown_lines"], config["overlap"])
+    return split_line_window(rel_path, lines, 0, len(lines), config["default_lines"], config["overlap"])
 
 
-def build_index(full_name: str) -> dict[str, Any]:
-    from .qdrant import get_qdrant_config, qdrant_is_ready, qdrant_upsert_index
+def build_index(full_name: str, topic: str = "") -> dict[str, Any]:
+    from .qdrant_store import get_qdrant_config, qdrant_is_ready, qdrant_upsert_index
     repo_path = download_repository(full_name)
     repo_id = slugify_repo(full_name)
     source_files = iter_source_files(repo_path)
@@ -210,6 +337,11 @@ def build_index(full_name: str) -> dict[str, Any]:
         raise RuntimeError("没有找到可索引的代码或文档文件")
     index = CodeIndex(repo_id, full_name, chunks)
     index.save()
+    index_path = INDEX_DIR / f"{repo_id}.json"
+    payload = json.loads(index_path.read_text(encoding="utf-8"))
+    payload["topic"] = topic.strip()
+    payload["topic_tags"] = build_topic_tags(full_name, topic)
+    index_path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     INDEX_CACHE[repo_id] = index
     vector_status = {"backend": "local", "enabled": False}
     warnings: list[str] = []
@@ -225,6 +357,8 @@ def build_index(full_name: str) -> dict[str, Any]:
     return {
         "repo_id": repo_id,
         "full_name": full_name,
+        "topic": topic.strip(),
+        "topic_tags": build_topic_tags(full_name, topic),
         "file_count": len(source_files),
         "chunk_count": len(chunks),
         "vector": vector_status,
@@ -239,12 +373,53 @@ def list_indexes() -> list[dict[str, Any]]:
             payload = json.loads(path.read_text(encoding="utf-8"))
         except json.JSONDecodeError:
             continue
+        if ensure_index_topic_metadata(payload):
+            path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
         repos.append(
             {
                 "repo_id": payload.get("repo_id"),
                 "full_name": payload.get("full_name"),
+                "topic": payload.get("topic", ""),
+                "topic_tags": payload.get("topic_tags", []),
                 "chunk_count": len(payload.get("chunks", [])),
                 "created_at": payload.get("created_at"),
             }
         )
     return repos
+
+
+def delete_index(repo_id: str) -> dict[str, Any]:
+    from .qdrant_store import qdrant_delete_repo
+
+    if not repo_id or "/" in repo_id or "\\" in repo_id or repo_id in {".", ".."}:
+        raise ValueError("repo_id 不合法")
+    index_path = (INDEX_DIR / f"{repo_id}.json").resolve()
+    if not str(index_path).startswith(str(INDEX_DIR.resolve())):
+        raise ValueError("repo_id 不合法")
+    if not index_path.exists():
+        raise ValueError("没有找到这个已索引仓库")
+
+    full_name = repo_id
+    try:
+        payload = json.loads(index_path.read_text(encoding="utf-8"))
+        full_name = payload.get("full_name") or repo_id
+    except json.JSONDecodeError:
+        pass
+
+    warnings: list[str] = []
+    vector_status = {"enabled": False, "deleted": False}
+    try:
+        vector_status = qdrant_delete_repo(repo_id)
+    except Exception as exc:
+        warnings.append(f"Qdrant 删除失败，本地索引已删除：{exc}")
+
+    index_path.unlink(missing_ok=True)
+    shutil.rmtree(REPOS_DIR / repo_id, ignore_errors=True)
+    INDEX_CACHE.pop(repo_id, None)
+    return {
+        "repo_id": repo_id,
+        "full_name": full_name,
+        "deleted": True,
+        "vector": vector_status,
+        "warnings": warnings,
+    }

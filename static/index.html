@@ -30,17 +30,25 @@
             <button id="refreshRepos" class="icon-button" title="刷新已索引仓库">刷新</button>
           </div>
 
-          <label>
-            关键词
-            <input id="keyword" placeholder="例如：跨模态哈希检索、RAG、代码生成 Agent" />
-          </label>
+          <section class="fold-section search-controls-section">
+            <button class="fold-head" data-fold-target="searchControlsWrap" type="button">
+              <span>GitHub 检索</span>
+              <span class="fold-mark">收起</span>
+            </button>
+            <div id="searchControlsWrap" class="fold-body search-controls-body">
+              <label>
+                关键词
+                <input id="keyword" placeholder="例如：跨模态哈希检索、RAG、代码生成 Agent" />
+              </label>
 
-          <label>
-            最少 Star
-            <input id="minStars" type="number" min="0" placeholder="可选，例如 100" />
-          </label>
+              <label>
+                最少 Star
+                <input id="minStars" type="number" min="0" placeholder="可选，例如 100" />
+              </label>
 
-          <button id="searchButton" class="primary">搜索 GitHub</button>
+              <button id="searchButton" class="primary">搜索 GitHub</button>
+            </div>
+          </section>
 
           <section class="fold-section">
             <button class="fold-head" data-fold-target="searchResultsWrap" type="button">

@@ -195,11 +195,36 @@ function renderSearchResults(items) {
     .join("");
 }
 
+function normalizeFilterText(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function repoFilterText(item) {
+  return normalizeFilterText(
+    [
+      item.full_name,
+      item.repo_id,
+      item.topic,
+      ...(Array.isArray(item.topic_tags) ? item.topic_tags : []),
+    ].join(" "),
+  );
+}
+
+function fuzzyIncludes(candidate, query) {
+  if (!query) return true;
+  if (candidate.includes(query)) return true;
+  const candidateTokens = candidate.split(/[\s/_-]+/).filter(Boolean);
+  const queryTokens = query.split(/[\s/_-]+/).filter(Boolean);
+  return queryTokens.every((queryToken) =>
+    candidateTokens.some((token) => token.includes(queryToken) || queryToken.includes(token)),
+  );
+}
+
 function renderRepos(items) {
   indexedRepos = items || indexedRepos;
-  const filter = (els.repoFilter.value || "").trim().toLowerCase();
+  const filter = normalizeFilterText(els.repoFilter.value);
   const visibleItems = filter
-    ? indexedRepos.filter((item) => `${item.full_name} ${item.repo_id}`.toLowerCase().includes(filter))
+    ? indexedRepos.filter((item) => fuzzyIncludes(repoFilterText(item), filter))
     : indexedRepos;
   if (!visibleItems.length) {
     els.repoList.className = "repo-list empty";
@@ -213,6 +238,7 @@ function renderRepos(items) {
         <article class="repo-item">
           <div class="repo-title">
             <button data-select-repo="${escapeHtml(item.repo_id)}" data-repo-name="${escapeHtml(item.full_name)}">${escapeHtml(item.full_name)}</button>
+            <button class="small-action danger-action" data-delete-repo="${escapeHtml(item.repo_id)}" data-repo-name="${escapeHtml(item.full_name)}">删除</button>
           </div>
           <div class="meta">
             <span>${Number(item.chunk_count).toLocaleString()} chunks</span>
@@ -238,6 +264,32 @@ async function loadRepos() {
   renderRepos(indexedRepos);
   if (!state.selectedRepoId && data.items && data.items[0]) {
     selectRepo(data.items[0].repo_id, data.items[0].full_name);
+  }
+}
+
+async function deleteIndexedRepo(repoId, repoName, button) {
+  const ok = window.confirm(`确认删除已索引仓库「${repoName}」吗？\n\n这会删除本地索引和下载缓存；如果 Qdrant 已连接，也会删除对应向量。`);
+  if (!ok) return;
+  setBusy(button, true, "删除中");
+  try {
+    const data = await api("/api/repos/delete", {
+      method: "POST",
+      body: JSON.stringify({ repo_id: repoId, confirm: true }),
+    });
+    if (state.selectedRepoId === repoId) {
+      state.selectedRepoId = "";
+      state.selectedRepoName = "";
+      els.selectedRepo.textContent = "先搜索并索引一个仓库";
+      els.repoBadge.textContent = "未选择仓库";
+      renderContexts([], "");
+    }
+    await loadRepos();
+    const warning = data.warnings && data.warnings.length ? `；${data.warnings[0]}` : "";
+    showToast(`已删除 ${data.full_name}${warning}`);
+  } catch (error) {
+    showToast(error.message);
+  } finally {
+    setBusy(button, false);
   }
 }
 
@@ -322,11 +374,16 @@ async function ingestRepo(fullName, button) {
   try {
     const data = await api("/api/ingest", {
       method: "POST",
-      body: JSON.stringify({ full_name: fullName }),
+      body: JSON.stringify({
+        full_name: fullName,
+        topic: els.keyword.value.trim(),
+      }),
     });
     await loadRepos();
     selectRepo(data.repo_id, data.full_name);
-    const vector = data.vector && data.vector.enabled ? `，已同步 ${data.vector.backend}` : "，本地知识库";
+    const selection = data.vector && data.vector.selection;
+    const selected = selection ? ` ${selection.selected_chunks}/${selection.total_chunks} 个向量片段` : "";
+    const vector = data.vector && data.vector.enabled ? `，已同步 ${data.vector.backend}${selected}` : "，本地知识库";
     const warning = data.warnings && data.warnings.length ? `；${data.warnings[0]}` : "";
     showToast(`索引完成：${data.file_count} 个文件，${data.chunk_count} 个片段${vector}${warning}`);
   } catch (error) {
@@ -353,7 +410,11 @@ function renderContexts(contexts, repoUrl = "") {
               ? `<a class="source-link" href="${githubSourceUrl(repoUrl, item)}" target="_blank" rel="noreferrer">GitHub</a>`
               : ""
           }
-          <div class="meta"><span>score ${item.score}</span></div>
+          <div class="meta">
+            <span>score ${item.score}</span>
+            ${item.retrieval_sources ? `<span>${item.retrieval_sources.join(" + ")}</span>` : ""}
+            ${item.compressed ? `<span>compressed ${item.compressed_line_count}/${item.original_line_count} lines</span>` : ""}
+          </div>
           <pre><code>${escapeHtml(item.content)}</code></pre>
         </article>
       `,
@@ -409,7 +470,12 @@ async function askQuestion() {
         const payload = JSON.parse(dataLine.replace("data:", "").trim());
         if (event === "meta") {
           els.modeBadge.textContent = payload.mode === "llm" ? "LLM 流式" : "本地抽取";
-          els.vectorBadge.textContent = payload.retrieval_backend === "qdrant" ? "Qdrant 检索" : "本地知识库";
+          els.vectorBadge.textContent =
+            payload.retrieval_backend === "hybrid"
+              ? "混合检索"
+              : payload.retrieval_backend === "qdrant"
+                ? "Qdrant 检索"
+                : "本地知识库";
           renderContexts(payload.contexts || [], payload.repo_url);
           if (payload.warnings && payload.warnings.length) showToast(payload.warnings[0]);
         }
@@ -460,6 +526,12 @@ document.addEventListener("click", (event) => {
   const ingest = event.target.closest("[data-ingest]");
   if (ingest) {
     ingestRepo(ingest.dataset.ingest, ingest);
+    return;
+  }
+
+  const deleteRepo = event.target.closest("[data-delete-repo]");
+  if (deleteRepo) {
+    deleteIndexedRepo(deleteRepo.dataset.deleteRepo, deleteRepo.dataset.repoName, deleteRepo);
     return;
   }
 

@@ -12,11 +12,13 @@ The app helps you find repositories worth studying, build a lightweight knowledg
 - Keep a memory cache in `.rag_demo/memory.json` to avoid repeated searches and repeated screening calls.
 - Download and index repository source files.
 - Split code into chunks and retrieve relevant context with local BM25.
+- Compress retrieved chunks into question-aware line windows before sending them to the LLM.
 - Use a local JSON knowledge base by default.
 - Optionally sync indexed chunks to Qdrant Cloud for vector retrieval.
 - Answer codebase architecture questions with an OpenAI-compatible chat API.
 - Fall back to local extractive answers when no LLM API key is configured.
 - Provide a browser UI with repository discovery, indexed repository search, streaming chat answers, citations, and copy actions.
+- Attach hidden topic tags to indexed repositories so the repository filter can fuzzy-match by the original learning topic.
 
 ## Quick Start
 
@@ -125,6 +127,21 @@ LLM_BASE_URL=https://your-compatible-endpoint/v1
 LLM_MODEL=your_model
 ```
 
+### Context Compression
+
+Query-time context compression is enabled by default, but it is threshold-triggered and scoped to the current turn. The app does not stack previous chat messages into the compression input. For each question, the retriever gets the most relevant chunks and calculates their raw context size. If the size is below `CONTEXT_COMPRESSION_THRESHOLD_CHARS`, the chunks are sent unchanged. Once the threshold is reached, the compressor keeps only the lines that are most related to the current question, including a small window around each selected line.
+
+```bash
+CONTEXT_COMPRESSION=1
+CONTEXT_MAX_CONTEXTS=6
+CONTEXT_COMPRESSION_THRESHOLD_CHARS=8000
+CONTEXT_MAX_CHARS=12000
+CONTEXT_SNIPPET_LINES=36
+CONTEXT_WINDOW_LINES=2
+```
+
+`CONTEXT_COMPRESSION_THRESHOLD_CHARS` controls when compression starts. `CONTEXT_MAX_CHARS` controls the maximum compressed context budget after compression has been triggered. Set `CONTEXT_COMPRESSION=0` if you want to always send raw retrieved chunks to the LLM.
+
 ## Optional Qdrant Cloud
 
 If Qdrant is not configured, the demo stores indexes under `.rag_demo/indexes` and uses local BM25 retrieval.
@@ -138,7 +155,36 @@ QDRANT_COLLECTION=codebase_rag
 
 EMBEDDING_MODEL=text-embedding-v4
 EMBEDDING_DIMENSIONS=1024
+EMBEDDING_MAX_CHARS=1800
 ```
+
+Use a separate Qdrant collection for each embedding dimension. For example, DashScope `text-embedding-v1` returns 1536-dimensional vectors, so it should use a collection such as `codebase_rag_v1_1536` with `EMBEDDING_DIMENSIONS=1536`. `EMBEDDING_MAX_CHARS` limits each code chunk before calling the embedding API, which helps avoid provider input-length errors.
+
+To reduce embedding cost, the app uses selective vector indexing by default. It keeps the full local BM25 index, but only syncs architecture-relevant chunks to Qdrant.
+
+```bash
+VECTOR_INDEX_MODE=selective
+VECTOR_MAX_CHUNKS=120
+DEFAULT_CHUNK_LINES=90
+PYTHON_CHUNK_LINES=120
+MARKDOWN_CHUNK_LINES=90
+CHUNK_OVERLAP_LINES=18
+```
+
+`VECTOR_INDEX_MODE=selective` prioritizes README, entry files, API/routes/services/models/config/database paths, and chunks containing code structure signals. Use `VECTOR_INDEX_MODE=all` to vectorize the first `VECTOR_MAX_CHUNKS` chunks, or `VECTOR_INDEX_MODE=off` to disable Qdrant sync entirely.
+
+Chunking is file-type aware. Python files are split by top-level classes/functions first, Markdown files are split by headings first, and only overlong chunks are split again with `CHUNK_OVERLAP_LINES`.
+
+At query time, hybrid retrieval is enabled by default. Qdrant retrieves semantic matches from the selected vector chunks, while local BM25 retrieves from the full local index. The two result lists are merged with reciprocal rank fusion and deduplicated by chunk id.
+
+```bash
+HYBRID_RETRIEVAL=1
+HYBRID_VECTOR_LIMIT=6
+HYBRID_LOCAL_LIMIT=8
+HYBRID_RRF_K=60
+```
+
+Set `HYBRID_RETRIEVAL=0` if you want to use Qdrant first and only fall back to local BM25 when vector retrieval is unavailable.
 
 The embedding API key reuses `DASHSCOPE_API_KEY` by default. You can also configure it separately:
 
@@ -167,6 +213,7 @@ app.py                         # Minimal application entry point
 codebase_rag/
   common.py                    # Shared paths, config, JSON, HTTP, and tokenization helpers
   github_discovery.py          # GitHub search, query rewriting, repository screening, and memory cache
+  context_compression.py       # Query-aware context compression before answer generation
   indexing.py                  # Repository download, file selection, chunking, local index, and BM25 retrieval
   llm.py                       # OpenAI-compatible chat/stream helpers and prompt construction
   qa.py                        # Retrieval and answer orchestration
@@ -180,9 +227,3 @@ static/
 Dockerfile                     # Container image definition
 docker-compose.yml             # Local Docker Compose deployment
 ```
-
-## Notes
-
-- Do not commit `.env`. It is ignored by `.gitignore`.
-- Keep real API keys only in your local `.env` or deployment secret manager.
-- The `.rag_demo/` directory is generated runtime data and should not be committed.

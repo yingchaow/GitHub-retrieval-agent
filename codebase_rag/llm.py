@@ -154,7 +154,7 @@ def call_llm_answer(question: str, repo_name: str, contexts: list[dict[str, Any]
         f"[{idx}] {item['path']}:{item['start_line']}-{item['end_line']}\n{item['content']}"
         for idx, item in enumerate(contexts, start=1)
     )
-    system_prompt = "你是一个资深软件架构助手。请只基于给定代码片段回答问题。"
+    system_prompt = "你是一个资深软件架构助手。请只基于本轮问题和给定代码片段回答，不使用历史对话。"
     user_prompt = f"""仓库：{repo_name}
 问题：{question}
 
@@ -178,7 +178,7 @@ def build_answer_prompt(question: str, repo_name: str, contexts: list[dict[str, 
         f"[{idx}] {item['path']}:{item['start_line']}-{item['end_line']}\n{item['content']}"
         for idx, item in enumerate(contexts, start=1)
     )
-    system_prompt = "你是一个资深软件架构助手。请只基于给定代码片段回答问题。"
+    system_prompt = "你是一个资深软件架构助手。请只基于本轮问题和给定代码片段回答，不使用历史对话。"
     user_prompt = f"""仓库：{repo_name}
 问题：{question}
 
